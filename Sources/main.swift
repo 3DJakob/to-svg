@@ -1,4 +1,5 @@
 import Cocoa
+import SwiftUI
 import CoreGraphics
 import UniformTypeIdentifiers
 
@@ -98,14 +99,90 @@ struct Converter {
     }
 }
 
+final class ConversionState: ObservableObject {
+    @Published var phase = "idle"
+    @Published var filename = "PDF · EPS · AI · PS"
+    @Published var completed = 0
+    @Published var total = 0
+    @Published var errors: [String] = []
+}
+
+struct ConversionView: View {
+    @ObservedObject var state: ConversionState
+    @Environment(\.accessibilityReduceMotion) var reduceMotion
+    var choose: () -> Void
+    @State private var spinning = false
+    private var busy: Bool { state.phase == "working" }
+    private var success: Bool { state.phase == "success" }
+
+    var body: some View {
+        ZStack {
+            LinearGradient(colors: [Color(red: 0.09, green: 0.10, blue: 0.20), Color(red: 0.19, green: 0.15, blue: 0.32), Color(red: 0.10, green: 0.23, blue: 0.28)], startPoint: .topLeading, endPoint: .bottomTrailing)
+            Circle().fill(Color.purple.opacity(0.25)).frame(width: 250, height: 250).blur(radius: 65).offset(x: -150, y: -120)
+            Circle().fill(Color.cyan.opacity(0.17)).frame(width: 220, height: 220).blur(radius: 60).offset(x: 165, y: 120)
+            VStack(spacing: 0) {
+                Text("TO SVG").font(.system(size: 10, weight: .semibold, design: .rounded)).tracking(3).foregroundStyle(.white.opacity(0.45))
+                    .padding(.top, 35)
+                Spacer(minLength: 20)
+                ZStack {
+                    Circle().fill(.white.opacity(0.035)).frame(width: 86, height: 86)
+                    Circle().stroke(.white.opacity(0.08), lineWidth: 1).frame(width: 86, height: 86)
+                    if busy {
+                        Circle().trim(from: 0, to: 0.72)
+                            .stroke(AngularGradient(colors: [.clear, .cyan.opacity(0.5), .white], center: .center), style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                            .frame(width: 86, height: 86)
+                            .rotationEffect(.degrees(spinning && !reduceMotion ? 360 : 0))
+                            .onAppear { spinning = false; withAnimation(.linear(duration: 1.5).repeatForever(autoreverses: false)) { spinning = true } }
+                            .onDisappear { spinning = false }
+                    }
+                    Image(systemName: success ? "checkmark" : state.phase == "error" ? "exclamationmark" : "point.topleft.down.to.point.bottomright.curvepath")
+                        .font(.system(size: 30, weight: .light))
+                        .foregroundStyle(success ? Color.mint : .white.opacity(0.9))
+                }
+                .accessibilityLabel(busy ? "Conversion in progress" : success ? "Conversion complete" : "To SVG")
+                Text(busy ? "Making vectors" : success ? "All done" : state.phase == "error" ? "Needs a little attention" : "A simpler kind of conversion")
+                    .font(.system(size: 23, weight: .medium)).tracking(-0.6).padding(.top, 24)
+                Text(success ? "Saved beside your originals" : state.filename)
+                    .font(.system(size: 12)).foregroundStyle(.white.opacity(0.5))
+                    .lineLimit(1).truncationMode(.middle).padding(.top, 9).padding(.horizontal, 32)
+                Spacer(minLength: 22)
+                if busy {
+                    VStack(spacing: 10) {
+                        ProgressView(value: Double(state.completed), total: Double(max(state.total, 1)))
+                            .tint(.white.opacity(0.8)).frame(width: 180)
+                        Text("\(state.completed) of \(state.total) files")
+                            .font(.system(size: 10, design: .monospaced)).foregroundStyle(.white.opacity(0.4))
+                    }.padding(.bottom, 28)
+                } else if success {
+                    Text("You're good to go").font(.system(size: 11)).foregroundStyle(.white.opacity(0.35)).padding(.bottom, 32)
+                } else if state.phase == "error" {
+                    ScrollView {
+                        Text(state.errors.joined(separator: "\n\n")).font(.system(size: 11)).foregroundStyle(.white.opacity(0.75)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
+                    }.frame(height: 90).padding(.horizontal, 28).padding(.bottom, 22)
+                } else {
+                    Button(action: choose) {
+                        Text("Choose files").font(.system(size: 12, weight: .medium)).padding(.horizontal, 23).padding(.vertical, 10)
+                            .background(.white.opacity(0.10), in: Capsule()).overlay(Capsule().stroke(.white.opacity(0.12), lineWidth: 1))
+                    }.buttonStyle(.plain).padding(.bottom, 28)
+                }
+            }
+        }
+        .foregroundStyle(.white)
+        .preferredColorScheme(.dark)
+        // Fill the hosting view, including the transparent title-bar region.
+        // A fixed height here leaves a gap when AppKit adds that region.
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .ignoresSafeArea()
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: state.phase)
+    }
+}
+
 final class AppDelegate: NSObject, NSApplicationDelegate {
     var window: NSWindow!
-    var status: NSTextField!
-    var details: NSTextView!
-    var choose: NSButton!
-    var reveal: NSButton!
+    let state = ConversionState()
     var pending = 0
-    var outputs: [URL] = []
+    var generation = 0
+    var started = Date()
     let queue = DispatchQueue(label: "ToSVG.conversion")
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -119,62 +196,62 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let appMenu = NSMenu()
         appMenu.addItem(withTitle: "Quit To SVG", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         let item = NSMenuItem(); item.submenu = appMenu; menu.addItem(item); NSApp.mainMenu = menu
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 560, height: 360), styleMask: [.titled, .closable, .miniaturizable], backing: .buffered, defer: false)
-        window.title = "To SVG"; window.center(); window.isReleasedWhenClosed = false
-        let title = NSTextField(labelWithString: "Files in. SVGs out.")
-        title.font = .systemFont(ofSize: 28, weight: .semibold)
-        let subtitle = NSTextField(wrappingLabelWithString: "Right-click files in Finder → Open With → To SVG.\nSVGs are saved beside the originals. Existing files are kept.")
-        status = NSTextField(labelWithString: "Ready for PDF, EPS, AI, and PS files")
-        status.font = .systemFont(ofSize: 13, weight: .medium)
-        choose = NSButton(title: "Choose Files…", target: self, action: #selector(pickFiles))
-        choose.bezelStyle = .rounded
-        reveal = NSButton(title: "Show SVGs in Finder", target: self, action: #selector(showFiles))
-        reveal.bezelStyle = .rounded; reveal.isEnabled = false
-        let buttons = NSStackView(views: [choose, reveal]); buttons.spacing = 10
-        let scroll = NSScrollView(); scroll.hasVerticalScroller = true
-        details = NSTextView(); details.isEditable = false; details.isSelectable = true
-        details.font = .systemFont(ofSize: 12); details.autoresizingMask = [.width]
-        scroll.documentView = details
-        let stack = NSStackView(views: [title, subtitle, status, scroll, buttons])
-        stack.orientation = .vertical; stack.alignment = .leading; stack.spacing = 18
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        window.contentView!.addSubview(stack)
-        NSLayoutConstraint.activate([
-            stack.leadingAnchor.constraint(equalTo: window.contentView!.leadingAnchor, constant: 26),
-            stack.trailingAnchor.constraint(equalTo: window.contentView!.trailingAnchor, constant: -26),
-            stack.topAnchor.constraint(equalTo: window.contentView!.topAnchor, constant: 26),
-            stack.bottomAnchor.constraint(equalTo: window.contentView!.bottomAnchor, constant: -26),
-            scroll.widthAnchor.constraint(equalTo: stack.widthAnchor), scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 100)
-        ])
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 440, height: 350), styleMask: [.titled, .closable, .fullSizeContentView], backing: .buffered, defer: false)
+        window.title = "To SVG"
+        window.titleVisibility = .hidden
+        window.titlebarAppearsTransparent = true
+        window.titlebarSeparatorStyle = .none
+        window.isMovableByWindowBackground = true
+        window.isReleasedWhenClosed = false
+        let hostingView = NSHostingView(rootView: ConversionView(state: state, choose: { [weak self] in self?.pickFiles() }))
+        hostingView.sizingOptions = []
+        window.contentView = hostingView
+        window.center()
     }
-    @objc func pickFiles() {
+    func pickFiles() {
         let panel = NSOpenPanel(); panel.allowsMultipleSelection = true; panel.canChooseDirectories = false
         panel.allowedContentTypes = ["pdf", "eps", "ai", "ps"].compactMap { UTType(filenameExtension: $0) }
         if panel.runModal() == .OK { enqueue(panel.urls) }
     }
-    @objc func showFiles() { NSWorkspace.shared.activateFileViewerSelecting(outputs) }
     func application(_ sender: NSApplication, openFiles filenames: [String]) {
         enqueue(filenames.map { URL(fileURLWithPath: $0) })
         sender.reply(toOpenOrPrint: .success)
     }
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        makeWindow(); window.makeKeyAndOrderFront(nil); return true
+    }
     func enqueue(_ urls: [URL]) {
+        guard !urls.isEmpty else { return }
         makeWindow(); window.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
-        pending += urls.count; status.stringValue = "Converting \(pending) file(s)…"
+        generation += 1
+        if pending == 0 {
+            state.completed = 0; state.total = 0; state.errors = []; started = Date()
+        }
+        pending += urls.count; state.total += urls.count; state.phase = "working"
         for url in urls {
             queue.async {
+                DispatchQueue.main.async { self.state.filename = url.lastPathComponent }
                 let result = Result { try Converter().convert(url) }
                 DispatchQueue.main.async {
-                    switch result {
-                    case .success(let files):
-                        self.outputs += files
-                        self.details.string += "✓ \(url.lastPathComponent) → \(files.map(\.lastPathComponent).joined(separator: ", "))\n"
-                    case .failure(let error):
-                        self.details.string += "✗ \(url.lastPathComponent): \(error.localizedDescription)\n"
+                    if case .failure(let error) = result {
+                        self.state.errors.append("\(url.lastPathComponent): \(error.localizedDescription)")
                     }
-                    self.pending -= 1
-                    self.status.stringValue = self.pending == 0 ? "Finished. \(self.outputs.count) SVG(s) created." : "Converting \(self.pending) file(s)…"
-                    self.reveal.isEnabled = !self.outputs.isEmpty
+                    self.pending -= 1; self.state.completed += 1
+                    if self.pending == 0 { self.finish() }
                 }
+            }
+        }
+    }
+    func finish() {
+        let token = generation
+        // Let quick conversions settle visually before the completion checkmark.
+        DispatchQueue.main.asyncAfter(deadline: .now() + max(0, 0.8 - Date().timeIntervalSince(started))) {
+            guard self.generation == token, self.pending == 0 else { return }
+            self.state.phase = self.state.errors.isEmpty ? "success" : "error"
+            guard self.state.errors.isEmpty else { self.state.filename = "Some files could not be converted"; return }
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.85) {
+                guard self.generation == token, self.pending == 0 else { return }
+                self.window.close()
             }
         }
     }
