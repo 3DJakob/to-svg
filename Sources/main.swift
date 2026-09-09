@@ -117,9 +117,9 @@ struct ConversionView: View {
 
     var body: some View {
         ZStack {
-            LinearGradient(colors: [Color(red: 0.09, green: 0.10, blue: 0.20), Color(red: 0.19, green: 0.15, blue: 0.32), Color(red: 0.10, green: 0.23, blue: 0.28)], startPoint: .topLeading, endPoint: .bottomTrailing)
-            Circle().fill(Color.purple.opacity(0.25)).frame(width: 250, height: 250).blur(radius: 65).offset(x: -150, y: -120)
-            Circle().fill(Color.cyan.opacity(0.17)).frame(width: 220, height: 220).blur(radius: 60).offset(x: 165, y: 120)
+            LinearGradient(colors: [Color(white: 0.12), Color(white: 0.055), Color(white: 0.025)], startPoint: .topLeading, endPoint: .bottomTrailing)
+            Circle().fill(Color.white.opacity(0.12)).frame(width: 280, height: 280).blur(radius: 75).offset(x: -120, y: -150)
+            Circle().fill(Color.white.opacity(0.045)).frame(width: 240, height: 240).blur(radius: 65).offset(x: 155, y: 105)
             VStack(spacing: 0) {
                 Text("TO SVG").font(.system(size: 10, weight: .semibold, design: .rounded)).tracking(3).foregroundStyle(.white.opacity(0.45))
                     .padding(.top, 35)
@@ -129,7 +129,7 @@ struct ConversionView: View {
                     Circle().stroke(.white.opacity(0.08), lineWidth: 1).frame(width: 86, height: 86)
                     if busy {
                         Circle().trim(from: 0, to: 0.72)
-                            .stroke(AngularGradient(colors: [.clear, .cyan.opacity(0.5), .white], center: .center), style: StrokeStyle(lineWidth: 2, lineCap: .round))
+                            .stroke(AngularGradient(colors: [.clear, .white.opacity(0.35), .white], center: .center), style: StrokeStyle(lineWidth: 2, lineCap: .round))
                             .frame(width: 86, height: 86)
                             .rotationEffect(.degrees(spinning && !reduceMotion ? 360 : 0))
                             .onAppear { spinning = false; withAnimation(.linear(duration: 1.5).repeatForever(autoreverses: false)) { spinning = true } }
@@ -137,7 +137,7 @@ struct ConversionView: View {
                     }
                     Image(systemName: success ? "checkmark" : state.phase == "error" ? "exclamationmark" : "point.topleft.down.to.point.bottomright.curvepath")
                         .font(.system(size: 30, weight: .light))
-                        .foregroundStyle(success ? Color.mint : .white.opacity(0.9))
+                        .foregroundStyle(.white.opacity(success ? 1 : 0.9))
                 }
                 .accessibilityLabel(busy ? "Conversion in progress" : success ? "Conversion complete" : "To SVG")
                 Text(busy ? "Making vectors" : success ? "All done" : state.phase == "error" ? "Needs a little attention" : "A simpler kind of conversion")
@@ -186,6 +186,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     let queue = DispatchQueue(label: "ToSVG.conversion")
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        // Set the running app's Dock icon even if Launch Services cached an older build.
+        if let iconURL = Bundle.main.url(forResource: "AppIcon", withExtension: "icns"),
+           let icon = NSImage(contentsOf: iconURL) {
+            NSApp.applicationIconImage = icon
+        }
         makeWindow()
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)

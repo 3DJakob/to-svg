@@ -27,12 +27,11 @@ Requires macOS 13+ to run and Xcode 26+ to build the Icon Composer artwork. Buil
 ```sh
 brew install poppler ghostscript
 ./scripts/build.sh
-mkdir -p ~/Applications
-cp -R 'build/To SVG.app' ~/Applications/
-open ~/Applications/'To SVG.app'
+cp -R 'build/To SVG.app' /Applications/
+open '/Applications/To SVG.app'
 ```
 
-If Finder hasn't listed it yet, use **Open With → Other…**, then select the app in your home Applications folder. This does not change your default PDF viewer.
+If Finder hasn't listed it yet, use **Open With → Other…**, then select the app in the shared Applications folder. This does not change your default PDF viewer.
 
 The app finds Homebrew tools in `/opt/homebrew/bin` or `/usr/local/bin`. The tools are not bundled; keep Poppler and Ghostscript installed. The local build is ad-hoc signed, not notarized for distribution.
 
