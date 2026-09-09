@@ -2,7 +2,7 @@
 
 <img src="assets/logo.png" alt="To SVG app icon" width="128">
 
-A small native macOS app. Select PDF, EPS, AI, or PS files in Finder, right-click → **Open With → To SVG**. SVGs appear in the source folder. You can also drop files on the app icon or launch it and choose files.
+A small native macOS app. Select PDF, EPS, AI, or PS files in Finder, right-click → **Open With → To SVG**. SVGs appear in the source folder. You can also drag files over the window to reveal a drop zone and drop them to convert, drop files on the app icon, or launch it and choose files.
 
 - Multiple files are queued in the background.
 - Single-page files produce `name.svg`; multipage files produce `name-page-1.svg`, etc.
@@ -16,7 +16,9 @@ A small native macOS app. Select PDF, EPS, AI, or PS files in Finder, right-clic
 
 | Converting | Done |
 | --- | --- |
-| ![Converting a batch of files](docs/images/converting.png) | ![Conversion complete](docs/images/complete.png) |
+| ![Converting a dummy illustration batch](docs/images/converting.png) | ![Conversion complete](docs/images/complete.png) |
+
+Drag files over the window to reveal **Drop to convert**, or use **Choose files**. The window closes automatically after a successful conversion.
 
 The app icon uses the curved vector path from the loading indicator. The current artwork is in [assets/AppIcon.icon](assets/AppIcon.icon), editable in Apple Icon Composer. The build uses Apple’s asset compiler to produce the layered macOS icon and an ICNS fallback.
 

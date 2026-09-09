@@ -101,10 +101,38 @@ struct Converter {
 
 final class ConversionState: ObservableObject {
     @Published var phase = "idle"
+    @Published var dragging = false
     @Published var filename = "PDF · EPS · AI · PS"
     @Published var completed = 0
     @Published var total = 0
     @Published var errors: [String] = []
+}
+
+final class DropHostingView: NSHostingView<ConversionView> {
+    var hover: (Bool) -> Void = { _ in }
+    var accept: ([URL]) -> Void = { _ in }
+
+    private func files(_ sender: NSDraggingInfo) -> [URL] {
+        (sender.draggingPasteboard.readObjects(forClasses: [NSURL.self], options: [.urlReadingFileURLsOnly: true]) as? [URL]) ?? []
+    }
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        let valid = !files(sender).isEmpty
+        hover(valid)
+        return valid ? .copy : []
+    }
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        draggingEntered(sender)
+    }
+    override func draggingExited(_ sender: NSDraggingInfo?) { hover(false) }
+    override func draggingEnded(_ sender: NSDraggingInfo) { hover(false) }
+    override func prepareForDragOperation(_ sender: NSDraggingInfo) -> Bool { !files(sender).isEmpty }
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        let urls = files(sender)
+        hover(false)
+        guard !urls.isEmpty else { return false }
+        accept(urls)
+        return true
+    }
 }
 
 struct ConversionView: View {
@@ -166,6 +194,24 @@ struct ConversionView: View {
                     }.buttonStyle(.plain).padding(.bottom, 28)
                 }
             }
+            .opacity(state.dragging ? 0 : 1)
+            if state.dragging {
+                RoundedRectangle(cornerRadius: 18)
+                    .fill(.white.opacity(0.035))
+                    .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(.white.opacity(0.3), style: StrokeStyle(lineWidth: 1, dash: [6, 5])))
+                    .padding(18).padding(.top, 14)
+                VStack(spacing: 16) {
+                    Image(systemName: "arrow.down.doc")
+                        .font(.system(size: 40, weight: .ultraLight))
+                    Text("Drop to convert")
+                        .font(.system(size: 23, weight: .medium)).tracking(-0.6)
+                    Text("PDF · EPS · AI · PS")
+                        .font(.system(size: 12)).foregroundStyle(.white.opacity(0.5))
+                    Text(busy ? "Add files to the queue" : "SVGs saved beside your originals")
+                        .font(.system(size: 11)).foregroundStyle(.white.opacity(0.35))
+                }
+                .allowsHitTesting(false)
+            }
         }
         .foregroundStyle(.white)
         .preferredColorScheme(.dark)
@@ -174,6 +220,7 @@ struct ConversionView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .ignoresSafeArea()
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.3), value: state.phase)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.18), value: state.dragging)
     }
 }
 
@@ -208,8 +255,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         window.titlebarSeparatorStyle = .none
         window.isMovableByWindowBackground = true
         window.isReleasedWhenClosed = false
-        let hostingView = NSHostingView(rootView: ConversionView(state: state, choose: { [weak self] in self?.pickFiles() }))
+        let hostingView = DropHostingView(rootView: ConversionView(state: state, choose: { [weak self] in self?.pickFiles() }))
         hostingView.sizingOptions = []
+        hostingView.registerForDraggedTypes([.fileURL])
+        hostingView.hover = { [weak self] active in self?.state.dragging = active }
+        hostingView.accept = { [weak self] urls in self?.enqueue(urls) }
         window.contentView = hostingView
         window.center()
     }
@@ -256,8 +306,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             guard self.state.errors.isEmpty else { self.state.filename = "Some files could not be converted"; return }
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.85) {
                 guard self.generation == token, self.pending == 0 else { return }
-                self.window.close()
+                self.closeWhenDragEnds(token: token)
             }
+        }
+    }
+    func closeWhenDragEnds(token: Int) {
+        guard generation == token, pending == 0 else { return }
+        if state.dragging {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                self.closeWhenDragEnds(token: token)
+            }
+        } else {
+            window.close()
         }
     }
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
