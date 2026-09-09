@@ -18,11 +18,11 @@ A small native macOS app. Select PDF, EPS, AI, or PS files in Finder, right-clic
 | --- | --- |
 | ![Converting a batch of files](docs/images/converting.png) | ![Conversion complete](docs/images/complete.png) |
 
-The app icon uses the curved vector path from the loading indicator. The editable artwork is in [assets/logo.svg](assets/logo.svg); the build generates a full-resolution macOS icon set.
+The app icon uses the curved vector path from the loading indicator. The current artwork is in [assets/AppIcon.icon](assets/AppIcon.icon), editable in Apple Icon Composer. The build uses Apple’s asset compiler to produce the layered macOS icon and an ICNS fallback.
 
 ## Build and install
 
-Requires macOS 13+ and Xcode Command Line Tools. Build for the current Mac:
+Requires macOS 13+ to run and Xcode 26+ to build the Icon Composer artwork. Build for the current Mac:
 
 ```sh
 brew install poppler ghostscript

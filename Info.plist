@@ -5,7 +5,8 @@
 <key>CFBundleDisplayName</key><string>To SVG</string>
 <key>CFBundleIdentifier</key><string>se.jakob.to-svg</string>
 <key>CFBundleIconFile</key><string>AppIcon</string>
-<key>CFBundleVersion</key><string>2</string>
+<key>CFBundleIconName</key><string>AppIcon</string>
+<key>CFBundleVersion</key><string>3</string>
 <key>CFBundleShortVersionString</key><string>1.0</string>
 <key>CFBundleExecutable</key><string>ToSVG</string>
 <key>CFBundlePackageType</key><string>APPL</string>
