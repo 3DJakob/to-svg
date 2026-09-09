@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleName</key><string>To SVG</string>
+<key>CFBundleDisplayName</key><string>To SVG</string>
+<key>CFBundleIdentifier</key><string>se.jakob.to-svg</string>
+<key>CFBundleVersion</key><string>1</string>
+<key>CFBundleShortVersionString</key><string>1.0</string>
+<key>CFBundleExecutable</key><string>ToSVG</string>
+<key>CFBundlePackageType</key><string>APPL</string>
+<key>LSMinimumSystemVersion</key><string>13.0</string>
+<key>NSHighResolutionCapable</key><true/>
+<key>CFBundleDocumentTypes</key><array><dict>
+<key>CFBundleTypeName</key><string>Vector documents</string>
+<key>CFBundleTypeRole</key><string>Viewer</string>
+<key>LSHandlerRank</key><string>Alternate</string>
+<key>CFBundleTypeExtensions</key><array><string>pdf</string><string>eps</string><string>ai</string><string>ps</string></array>
+<key>LSItemContentTypes</key><array><string>com.adobe.pdf</string><string>com.adobe.encapsulated-postscript</string><string>com.adobe.illustrator.ai-image</string><string>com.adobe.postscript</string></array>
+</dict></array>
+</dict></plist>
