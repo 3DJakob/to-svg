@@ -2,7 +2,7 @@
 
 <img src="assets/logo.png" alt="To SVG app icon" width="128">
 
-A small native macOS app. Select PDF, EPS, AI, or PS files in Finder, right-click → **Open With → To SVG**. SVGs appear in the source folder. You can also drag files over the window to reveal a drop zone and drop them to convert, drop files on the app icon, or launch it and choose files.
+A small native macOS app. Select PDF, EPS, AI, PS, or SVG files in Finder, right-click → **Open With → To SVG**. SVGs appear in the source folder. You can also drag files over the window to reveal a drop zone and drop them to convert, drop files on the app icon, or launch it and choose files.
 
 - Multiple files are queued in the background.
 - Single-page files produce `name.svg`; multipage files produce `name-page-1.svg`, etc.
@@ -10,6 +10,7 @@ A small native macOS app. Select PDF, EPS, AI, or PS files in Finder, right-clic
 - A minimal gradient window shows an animated conversion ring and batch progress.
 - Successful conversions show a brief checkmark, then automatically close the window. Errors stay visible so you can read them.
 - Animation respects the macOS Reduce Motion setting.
+- “Convert strokes to outlines” expands borders into filled paths; the checkbox choice is remembered between launches.
 - Processing is local, with no uploads.
 
 ## A quick look
@@ -55,4 +56,5 @@ Tests real EPS, multipage PDF, PDF-compatible AI, PostScript AI, unsupported AI,
 
 ```sh
 'build/To SVG.app/Contents/MacOS/ToSVG' --convert /absolute/path/file.pdf
+# Add --flatten-strokes for the fill-only conversion mode.
 ```

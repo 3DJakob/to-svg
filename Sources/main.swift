@@ -8,6 +8,229 @@ struct ConversionError: LocalizedError {
     var errorDescription: String? { message }
 }
 
+private enum SVGStrokeFlattener {
+    static func flatten(_ data: Data) throws -> Data {
+        guard var svg = String(data: data, encoding: .utf8) else { return data }
+        let pattern = #"<(path|circle|ellipse|rect|line|polyline|polygon)\b[^>]*?(?:/>|>)"#
+        let regex = try NSRegularExpression(pattern: pattern, options: [.caseInsensitive])
+        let matches = regex.matches(in: svg, range: NSRange(svg.startIndex..., in: svg)).reversed()
+        for match in matches {
+            guard let range = Range(match.range, in: svg) else { continue }
+            let tag = String(svg[range])
+            let inherited = inheritedAttributes(before: match.range.location, in: svg)
+            let style = styleAttributes(in: tag)
+            let stroke = attribute("stroke", in: tag) ?? style["stroke"] ?? inherited["stroke"]
+            guard let stroke, stroke.lowercased() != "none" else { continue }
+            let width = CGFloat(Double(attribute("stroke-width", in: tag) ?? style["stroke-width"] ?? inherited["stroke-width"] ?? "1") ?? 1)
+            let cap = CGLineCap(rawValue: capValue(attribute("stroke-linecap", in: tag) ?? style["stroke-linecap"] ?? inherited["stroke-linecap"])) ?? .butt
+            let join = CGLineJoin(rawValue: joinValue(attribute("stroke-linejoin", in: tag) ?? style["stroke-linejoin"] ?? inherited["stroke-linejoin"])) ?? .miter
+            let miter = CGFloat(Double(attribute("stroke-miterlimit", in: tag) ?? style["stroke-miterlimit"] ?? inherited["stroke-miterlimit"] ?? "4") ?? 4)
+            let element = tag.dropFirst().split(separator: " ", maxSplits: 1).first.map(String.init) ?? "path"
+            guard let path = shapePath(element, tag: tag) else { continue }
+            let outline = path.copy(strokingWithWidth: width, lineCap: cap, lineJoin: join, miterLimit: miter)
+            let outlineD = serialize(outline)
+            let cleaned = removeStrokeAttributes(from: tag)
+            let outlineBase = removeFillAttributes(from: cleaned)
+            let outlineAttributes = outlineBase.replacingOccurrences(of: "\\s+d\\s*=\\s*[\\\"'][^\\\"']*[\\\"']", with: "", options: .regularExpression)
+                .replacingOccurrences(of: "\\s*/?>$", with: " fill=\"\(escape(stroke))\" d=\"\(escape(outlineD))\"/>", options: .regularExpression)
+            let fillTag = outlineAttributes
+            let originalFill = attribute("fill", in: cleaned) ?? style["fill"] ?? inherited["fill"]
+            let replacement = originalFill == nil || originalFill == "none" ? fillTag : cleaned + "\n" + fillTag
+            svg.replaceSubrange(range, with: replacement)
+        }
+        let groupRegex = try NSRegularExpression(pattern: #"<(svg|g)\b[^>]*>"#, options: [.caseInsensitive])
+        for match in groupRegex.matches(in: svg, range: NSRange(svg.startIndex..., in: svg)).reversed() {
+            guard let range = Range(match.range, in: svg) else { continue }
+            svg.replaceSubrange(range, with: removeStrokeAttributes(from: String(svg[range])))
+        }
+        return Data(svg.utf8)
+    }
+
+    private static func inheritedAttributes(before location: Int, in svg: String) -> [String: String] {
+        let prefix = String(svg.prefix(location))
+        let regex = try? NSRegularExpression(pattern: #"</?([A-Za-z][\w:.-]*)([^>]*)>"#)
+        var stack: [[String: String]] = []
+        for match in regex?.matches(in: prefix, range: NSRange(prefix.startIndex..., in: prefix)) ?? [] {
+            guard let range = Range(match.range, in: prefix) else { continue }
+            let token = String(prefix[range])
+            if token.hasPrefix("</") { if !stack.isEmpty { stack.removeLast() }; continue }
+            if token.hasPrefix("<?") || token.hasPrefix("<!") || token.hasSuffix("/>") { continue }
+            let name = Range(match.range(at: 1), in: prefix).map { String(prefix[$0]).lowercased() } ?? ""
+            guard name == "svg" || name == "g" else { continue }
+            var values = stack.last ?? [:]
+            values.merge(styleAttributes(in: token)) { _, new in new }
+            for key in ["stroke", "stroke-width", "stroke-linecap", "stroke-linejoin", "stroke-miterlimit", "fill"] {
+                if let value = attribute(key, in: token) { values[key] = value }
+            }
+            stack.append(values)
+        }
+        return stack.last ?? [:]
+    }
+
+    private static func shapePath(_ element: String, tag: String) -> CGMutablePath? {
+        if element == "path" { return attribute("d", in: tag).flatMap(path(from:)) }
+        let result = CGMutablePath()
+        switch element {
+        case "circle":
+            guard let cx = numberAttribute("cx", in: tag), let cy = numberAttribute("cy", in: tag), let r = numberAttribute("r", in: tag) else { return nil }
+            let box = CGRect(x: cx - r, y: cy - r, width: r * 2, height: r * 2); result.addEllipse(in: box)
+        case "ellipse":
+            guard let cx = numberAttribute("cx", in: tag), let cy = numberAttribute("cy", in: tag), let rx = numberAttribute("rx", in: tag), let ry = numberAttribute("ry", in: tag) else { return nil }
+            result.addEllipse(in: CGRect(x: cx - rx, y: cy - ry, width: rx * 2, height: ry * 2))
+        case "line":
+            guard let x1 = numberAttribute("x1", in: tag), let y1 = numberAttribute("y1", in: tag), let x2 = numberAttribute("x2", in: tag), let y2 = numberAttribute("y2", in: tag) else { return nil }
+            result.move(to: CGPoint(x: x1, y: y1)); result.addLine(to: CGPoint(x: x2, y: y2))
+        default: return nil
+        }
+        return result
+    }
+
+    private static func numberAttribute(_ name: String, in tag: String) -> CGFloat? {
+        guard let value = attribute(name, in: tag) else { return nil }
+        return Double(value).map { CGFloat($0) }
+    }
+
+    private static func attribute(_ name: String, in tag: String) -> String? {
+        let escaped = NSRegularExpression.escapedPattern(for: name)
+        guard let regex = try? NSRegularExpression(pattern: "\\b(\(escaped))\\s*=\\s*[\\\"']([^\\\"']*)[\\\"']"),
+              let match = regex.firstMatch(in: tag, range: NSRange(tag.startIndex..., in: tag)),
+              let value = Range(match.range(at: 2), in: tag) else { return nil }
+        return String(tag[value])
+    }
+
+    private static func styleAttributes(in tag: String) -> [String: String] {
+        guard let style = attribute("style", in: tag) else { return [:] }
+        return style.split(separator: ";").reduce(into: [:]) { result, part in
+            let pair = part.split(separator: ":", maxSplits: 1).map(String.init)
+            if pair.count == 2 { result[pair[0].trimmingCharacters(in: .whitespaces)] = pair[1].trimmingCharacters(in: .whitespaces) }
+        }
+    }
+
+    private static func removeStrokeAttributes(from tag: String) -> String {
+        var result = tag
+        for name in ["stroke", "stroke-width", "stroke-linecap", "stroke-linejoin", "stroke-miterlimit", "stroke-opacity", "stroke-dasharray", "stroke-dashoffset"] {
+            let escaped = NSRegularExpression.escapedPattern(for: name)
+            result = result.replacingOccurrences(of: "\\s+(\(escaped))\\s*=\\s*[\\\"'][^\\\"']*[\\\"']", with: "", options: .regularExpression)
+        }
+        if let style = attribute("style", in: result) {
+            let filtered = style.split(separator: ";").filter { !$0.trimmingCharacters(in: .whitespaces).lowercased().hasPrefix("stroke") }.joined(separator: ";")
+            result = result.replacingOccurrences(of: style, with: filtered)
+        }
+        return result
+    }
+
+    private static func removeFillAttributes(from tag: String) -> String {
+        var result = tag.replacingOccurrences(of: "\\s+fill\\s*=\\s*[\\\"'][^\\\"']*[\\\"']", with: "", options: .regularExpression)
+        if let style = attribute("style", in: result) {
+            let filtered = style.split(separator: ";").filter { !$0.trimmingCharacters(in: .whitespaces).lowercased().hasPrefix("fill") }.joined(separator: ";")
+            result = result.replacingOccurrences(of: style, with: filtered)
+        }
+        return result
+    }
+
+    private static func capValue(_ value: String?) -> Int32 {
+        switch value?.lowercased() { case "round": return 1; case "square": return 2; default: return 0 }
+    }
+    private static func joinValue(_ value: String?) -> Int32 {
+        switch value?.lowercased() { case "round": return 1; case "bevel": return 2; default: return 0 }
+    }
+    private static func escape(_ value: String) -> String { value.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "\"", with: "&quot;") }
+
+    private static func path(from d: String) -> CGMutablePath? {
+        let tokenRegex = try? NSRegularExpression(pattern: #"[A-Za-z]|[-+]?(?:\d*\.\d+|\d+\.?)(?:[eE][-+]?\d+)?"#)
+        let tokens = tokenRegex?.matches(in: d, range: NSRange(d.startIndex..., in: d)).compactMap { match -> String? in
+            guard let range = Range(match.range, in: d) else { return nil }
+            return String(d[range])
+        } ?? []
+        var path = CGMutablePath(), i = 0, command = "", current = CGPoint.zero, start = CGPoint.zero
+        func number() -> CGFloat? { guard i < tokens.count, let value = Double(tokens[i]) else { return nil }; i += 1; return CGFloat(value) }
+        while i < tokens.count {
+            if tokens[i].count == 1, tokens[i].first!.isLetter { command = tokens[i]; i += 1 }
+            guard !command.isEmpty else { return nil }
+            let relative = command == command.lowercased(), upper = command.uppercased()
+            func point(_ x: CGFloat, _ y: CGFloat) -> CGPoint { relative ? CGPoint(x: current.x + x, y: current.y + y) : CGPoint(x: x, y: y) }
+            switch upper {
+            case "M", "L":
+                guard let x = number(), let y = number() else { return path.isEmpty ? nil : path }
+                let p = point(x, y); if upper == "M" { path.move(to: p); start = p; command = relative ? "l" : "L" } else { path.addLine(to: p) }; current = p
+            case "C":
+                guard let x1 = number(), let y1 = number(), let x2 = number(), let y2 = number(), let x = number(), let y = number() else { return nil }
+                let p1 = point(x1, y1), p2 = relative ? CGPoint(x: current.x + x2, y: current.y + y2) : CGPoint(x: x2, y: y2), p = point(x, y); path.addCurve(to: p, control1: p1, control2: p2); current = p
+            case "A":
+                guard let rx = number(), let ry = number(), let rotation = number(), let largeArc = number(), let sweep = number(), let x = number(), let y = number() else { return nil }
+                let p = point(x, y)
+                appendArc(to: path, from: current, end: p, radiusX: rx, radiusY: ry, rotation: rotation, largeArc: largeArc != 0, sweep: sweep != 0)
+                current = p
+            case "H": guard let x = number() else { return nil }; let p = relative ? CGPoint(x: current.x + x, y: current.y) : CGPoint(x: x, y: current.y); path.addLine(to: p); current = p
+            case "V": guard let y = number() else { return nil }; let p = relative ? CGPoint(x: current.x, y: current.y + y) : CGPoint(x: current.x, y: y); path.addLine(to: p); current = p
+            case "Z": path.closeSubpath(); current = start; command = ""
+            default: return nil
+            }
+        }
+        return path
+    }
+
+    private static func appendArc(to path: CGMutablePath, from start: CGPoint, end: CGPoint, radiusX: CGFloat, radiusY: CGFloat, rotation: CGFloat, largeArc: Bool, sweep: Bool) {
+        var rx = abs(radiusX), ry = abs(radiusY)
+        if rx == 0 || ry == 0 { path.addLine(to: end); return }
+        if abs(start.x - end.x) < 0.000001 && abs(start.y - end.y) < 0.000001 { return }
+        let phi = rotation * .pi / 180
+        let cosPhi = cos(phi), sinPhi = sin(phi)
+        let dx = (start.x - end.x) / 2, dy = (start.y - end.y) / 2
+        let xPrime = cosPhi * dx + sinPhi * dy
+        let yPrime = -sinPhi * dx + cosPhi * dy
+        let radiusScale = (xPrime * xPrime) / (rx * rx) + (yPrime * yPrime) / (ry * ry)
+        if radiusScale > 1 { let scale = sqrt(radiusScale); rx *= scale; ry *= scale }
+        let denominator = rx * rx * yPrime * yPrime + ry * ry * xPrime * xPrime
+        let numerator = max(0, (rx * rx * ry * ry - rx * rx * yPrime * yPrime - ry * ry * xPrime * xPrime) / max(denominator, 0.0000001))
+        let sign: CGFloat = largeArc == sweep ? -1 : 1
+        let coefficient = sign * sqrt(numerator)
+        let centerXPrime = coefficient * (rx * yPrime / ry)
+        let centerYPrime = coefficient * (-ry * xPrime / rx)
+        let center = CGPoint(x: cosPhi * centerXPrime - sinPhi * centerYPrime + (start.x + end.x) / 2,
+                             y: sinPhi * centerXPrime + cosPhi * centerYPrime + (start.y + end.y) / 2)
+        func vectorAngle(_ ux: CGFloat, _ uy: CGFloat, _ vx: CGFloat, _ vy: CGFloat) -> CGFloat {
+            let dot = ux * vx + uy * vy
+            let length = sqrt((ux * ux + uy * uy) * (vx * vx + vy * vy))
+            let angle = acos(max(-1, min(1, dot / max(length, 0.0000001))))
+            return ux * vy - uy * vx < 0 ? -angle : angle
+        }
+        let ux = (xPrime - centerXPrime) / rx, uy = (yPrime - centerYPrime) / ry
+        let vx = (-xPrime - centerXPrime) / rx, vy = (-yPrime - centerYPrime) / ry
+        var startAngle = vectorAngle(1, 0, ux, uy)
+        var delta = vectorAngle(ux, uy, vx, vy)
+        if !sweep && delta > 0 { delta -= 2 * .pi }
+        if sweep && delta < 0 { delta += 2 * .pi }
+        let segments = max(1, Int(ceil(abs(delta) / (.pi / 2))))
+        let step = delta / CGFloat(segments)
+        func pointAt(_ angle: CGFloat) -> CGPoint {
+            CGPoint(x: center.x + rx * cosPhi * cos(angle) - ry * sinPhi * sin(angle),
+                    y: center.y + rx * sinPhi * cos(angle) + ry * cosPhi * sin(angle))
+        }
+        func derivativeAt(_ angle: CGFloat) -> CGPoint {
+            CGPoint(x: -rx * cosPhi * sin(angle) - ry * sinPhi * cos(angle),
+                    y: -rx * sinPhi * sin(angle) + ry * cosPhi * cos(angle))
+        }
+        for _ in 0..<segments {
+            let endAngle = startAngle + step
+            let alpha = 4 / 3 * tan(step / 4)
+            let p1 = pointAt(startAngle), p2 = pointAt(endAngle)
+            let d1 = derivativeAt(startAngle), d2 = derivativeAt(endAngle)
+            path.addCurve(to: p2, control1: CGPoint(x: p1.x + alpha * d1.x, y: p1.y + alpha * d1.y), control2: CGPoint(x: p2.x - alpha * d2.x, y: p2.y - alpha * d2.y))
+            startAngle = endAngle
+        }
+    }
+
+    private static func serialize(_ path: CGPath) -> String {
+        var result = ""
+        path.applyWithBlock { element in
+            let p = element.pointee.points
+            switch element.pointee.type { case .moveToPoint: result += "M \(p[0].x) \(p[0].y) "; case .addLineToPoint: result += "L \(p[0].x) \(p[0].y) "; case .addCurveToPoint: result += "C \(p[0].x) \(p[0].y) \(p[1].x) \(p[1].y) \(p[2].x) \(p[2].y) "; case .addQuadCurveToPoint: result += "Q \(p[0].x) \(p[0].y) \(p[1].x) \(p[1].y) "; case .closeSubpath: result += "Z "; @unknown default: break }
+        }
+        return result
+    }
+}
+
 struct Converter {
     let fm = FileManager.default
     func executable(_ name: String) throws -> URL {
@@ -43,9 +266,31 @@ struct Converter {
             throw ConversionError(message: "\(name) could not convert this file. \(detail.suffix(1600))")
         }
     }
-    func convert(_ input: URL) throws -> [URL] {
-        guard ["pdf", "eps", "ai", "ps"].contains(input.pathExtension.lowercased()) else {
-            throw ConversionError(message: "Choose a PDF, EPS, AI, or PS file.")
+    func convert(_ input: URL, flattenStrokes: Bool = false) throws -> [URL] {
+        let extensionName = input.pathExtension.lowercased()
+        guard ["pdf", "eps", "ai", "ps", "svg"].contains(extensionName) else {
+            throw ConversionError(message: "Choose a PDF, EPS, AI, PS, or SVG file.")
+        }
+        if extensionName == "svg" {
+            let data = try Data(contentsOf: input)
+            guard data.range(of: Data("<svg".utf8)) != nil else {
+                throw ConversionError(message: "This is not a valid SVG file.")
+            }
+            let outputData = flattenStrokes ? try SVGStrokeFlattener.flatten(data) : data
+            let directory = input.deletingLastPathComponent()
+            let base = input.deletingPathExtension().lastPathComponent
+            var number = 1
+            while true {
+                let suffix = number == 1 ? "" : " (\(number))"
+                let target = directory.appendingPathComponent(base + suffix + ".svg")
+                do {
+                    try outputData.write(to: target, options: [.withoutOverwriting])
+                    return [target]
+                } catch let error as NSError {
+                    if error.domain == NSCocoaErrorDomain && error.code == NSFileWriteFileExistsError { number += 1; continue }
+                    throw error
+                }
+            }
         }
         let temporary = fm.temporaryDirectory.appendingPathComponent("ToSVG-" + UUID().uuidString)
         try fm.createDirectory(at: temporary, withIntermediateDirectories: true)
@@ -70,6 +315,7 @@ struct Converter {
             try run("pdftocairo", ["-svg", "-f", String(page), "-l", String(page), pdf.path, svg.path], in: temporary)
             let data = try Data(contentsOf: svg)
             guard data.range(of: Data("<svg".utf8)) != nil else { throw ConversionError(message: "The converter did not produce a valid SVG.") }
+            if flattenStrokes { try SVGStrokeFlattener.flatten(data).write(to: svg) }
             let base = input.deletingPathExtension().lastPathComponent + (document.numberOfPages > 1 ? "-page-\(page)" : "")
             staged.append((svg, base))
         }
@@ -106,6 +352,7 @@ final class ConversionState: ObservableObject {
     @Published var completed = 0
     @Published var total = 0
     @Published var errors: [String] = []
+    @Published var flattenStrokes = UserDefaults.standard.bool(forKey: "flattenStrokes")
 }
 
 final class DropHostingView: NSHostingView<ConversionView> {
@@ -188,10 +435,22 @@ struct ConversionView: View {
                         Text(state.errors.joined(separator: "\n\n")).font(.system(size: 11)).foregroundStyle(.white.opacity(0.75)).textSelection(.enabled).frame(maxWidth: .infinity, alignment: .leading)
                     }.frame(height: 90).padding(.horizontal, 28).padding(.bottom, 22)
                 } else {
-                    Button(action: choose) {
-                        Text("Choose files").font(.system(size: 12, weight: .medium)).padding(.horizontal, 23).padding(.vertical, 10)
-                            .background(.white.opacity(0.10), in: Capsule()).overlay(Capsule().stroke(.white.opacity(0.12), lineWidth: 1))
-                    }.buttonStyle(.plain).padding(.bottom, 28)
+                    VStack(spacing: 16) {
+                        Toggle(isOn: Binding(get: { state.flattenStrokes }, set: { value in
+                            state.flattenStrokes = value
+                            UserDefaults.standard.set(value, forKey: "flattenStrokes")
+                        })) {
+                            Text("Convert strokes to outlines")
+                                .font(.system(size: 11))
+                                .foregroundStyle(.white.opacity(0.7))
+                        }
+                        .toggleStyle(.checkbox)
+                        .help("Expand borders into filled paths so the SVG does not use strokes")
+                        Button(action: choose) {
+                            Text("Choose files").font(.system(size: 12, weight: .medium)).padding(.horizontal, 23).padding(.vertical, 10)
+                                .background(.white.opacity(0.10), in: Capsule()).overlay(Capsule().stroke(.white.opacity(0.12), lineWidth: 1))
+                        }.buttonStyle(.plain)
+                    }.padding(.bottom, 28)
                 }
             }
             .opacity(state.dragging ? 0 : 1)
@@ -205,7 +464,7 @@ struct ConversionView: View {
                         .font(.system(size: 40, weight: .ultraLight))
                     Text("Drop to convert")
                         .font(.system(size: 23, weight: .medium)).tracking(-0.6)
-                    Text("PDF · EPS · AI · PS")
+                    Text("PDF · EPS · AI · PS · SVG")
                         .font(.system(size: 12)).foregroundStyle(.white.opacity(0.5))
                     Text(busy ? "Add files to the queue" : "SVGs saved beside your originals")
                         .font(.system(size: 11)).foregroundStyle(.white.opacity(0.35))
@@ -248,7 +507,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let appMenu = NSMenu()
         appMenu.addItem(withTitle: "Quit To SVG", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         let item = NSMenuItem(); item.submenu = appMenu; menu.addItem(item); NSApp.mainMenu = menu
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 440, height: 350), styleMask: [.titled, .closable, .fullSizeContentView], backing: .buffered, defer: false)
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 440, height: 390), styleMask: [.titled, .closable, .fullSizeContentView], backing: .buffered, defer: false)
         window.title = "To SVG"
         window.titleVisibility = .hidden
         window.titlebarAppearsTransparent = true
@@ -265,7 +524,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     func pickFiles() {
         let panel = NSOpenPanel(); panel.allowsMultipleSelection = true; panel.canChooseDirectories = false
-        panel.allowedContentTypes = ["pdf", "eps", "ai", "ps"].compactMap { UTType(filenameExtension: $0) }
+        panel.allowedContentTypes = ["pdf", "eps", "ai", "ps", "svg"].compactMap { UTType(filenameExtension: $0) }
         if panel.runModal() == .OK { enqueue(panel.urls) }
     }
     func application(_ sender: NSApplication, openFiles filenames: [String]) {
@@ -286,7 +545,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for url in urls {
             queue.async {
                 DispatchQueue.main.async { self.state.filename = url.lastPathComponent }
-                let result = Result { try Converter().convert(url) }
+                let flattenStrokes = self.state.flattenStrokes
+                let result = Result { try Converter().convert(url, flattenStrokes: flattenStrokes) }
                 DispatchQueue.main.async {
                     if case .failure(let error) = result {
                         self.state.errors.append("\(url.lastPathComponent): \(error.localizedDescription)")
@@ -331,8 +591,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
 if CommandLine.arguments.dropFirst().first == "--convert" {
     var failed = false
-    for path in CommandLine.arguments.dropFirst(2) {
-        do { for result in try Converter().convert(URL(fileURLWithPath: path)) { print(result.path) } }
+    let flattenStrokes = CommandLine.arguments.contains("--flatten-strokes")
+    for path in CommandLine.arguments.dropFirst(2).filter({ $0 != "--flatten-strokes" }) {
+        do { for result in try Converter().convert(URL(fileURLWithPath: path), flattenStrokes: flattenStrokes) { print(result.path) } }
         catch { fputs("\(path): \(error.localizedDescription)\n", stderr); failed = true }
     }
     exit(failed ? 1 : 0)

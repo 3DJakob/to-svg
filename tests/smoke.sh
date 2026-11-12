@@ -15,6 +15,17 @@ PS
 "$APP" --convert "$TEST_DIR/art & shape.eps"
 test -s "$TEST_DIR/art & shape.svg"
 test -s "$TEST_DIR/art & shape (2).svg"
+cat > "$TEST_DIR/stroked.eps" <<'PS'
+%!PS-Adobe-3.0 EPSF-3.0
+%%BoundingBox: 0 0 200 100
+0 0 1 setrgbcolor
+12 setlinewidth
+20 20 moveto 180 80 lineto stroke
+showpage
+PS
+"$APP" --convert --flatten-strokes "$TEST_DIR/stroked.eps"
+test -s "$TEST_DIR/stroked.svg"
+! grep -q 'stroke' "$TEST_DIR/stroked.svg"
 gs -q -dSAFER -dBATCH -dNOPAUSE -sDEVICE=pdfwrite "-sOutputFile=$TEST_DIR/multi.pdf" "$TEST_DIR/art & shape.eps" "$TEST_DIR/art & shape.eps"
 "$APP" --convert "$TEST_DIR/multi.pdf"
 test -s "$TEST_DIR/multi-page-1.svg"
